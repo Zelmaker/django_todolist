@@ -1,0 +1,17 @@
+# Используем образ, содержащий Nginx
+FROM nginx:latest
+
+# Копируем конфигурационный файл Nginx внутрь образа
+COPY nginx.conf /etc/nginx/nginx.conf
+
+# Копируем статические файлы внутрь образа
+COPY static/ /usr/share/nginx/html/
+
+# Задаем переменную окружения API_URL
+ENV API_URL=http://api:8000
+
+# Открываем порт 80, чтобы Nginx мог слушать запросы
+EXPOSE 80
+
+# Запускаем Nginx
+CMD ["nginx", "-g", "daemon off;"]

@@ -1,0 +1,13 @@
+# Используем образ PostgreSQL
+FROM postgres:latest
+
+# Задаем переменные окружения для базы данных
+ENV POSTGRES_USER=postgres
+ENV POSTGRES_PASSWORD=postgres
+ENV POSTGRES_DB=postgres
+
+# Копируем файл с инициализационными скриптами
+COPY init.sql /docker-entrypoint-initdb.d/
+
+# Открываем порт 5432, чтобы PostgreSQL мог слушать запросы
+EXPOSE 5432

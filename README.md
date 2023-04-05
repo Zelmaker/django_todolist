@@ -1,3 +1,6 @@
+<details>
+<summary><b>Project creation</b></summary>
+
 ### Create virtual environment / Создать виртуальное окружение
 Windows
 ```
@@ -24,7 +27,7 @@ source venv/bin/activate
 python.exe -m pip install --upgrade pip
 pip install Django
 pip install python-dotenv
-pip install psycopg2
+pip install psycopg2(меняем на psycopg2-binary)
 ```
 
 ### Create requirements.txt / создаем файл с зависимостями
@@ -236,5 +239,209 @@ git commit -m "Your commit message here"
 
 git push origin master
 
+```
+</details>
+
+<details>
+<summary><b>Deploy dockerfile, docker-compose</b></summary>
 
 ```
+Договорились, что фронтенд предоставит мне образ, в котором будет установлен nginx, раздающий статические файлы и проксирующий запросы по /api, /admin и /static на мой контейнер.
+
+Итого мне потребуется 4 контейнера:
+Frontend — отдает статические файлы пользователю и по /api направляет запросы на контейнер с API.
+API — наш бэкенд, должен слушать на 8000-м порту.
+Миграции — контейнер, применяющий миграции при старте приложения. Это такой же контейнер, как и API, только выполняющий отдельную команду (python [manage.py](http://manage.py) migrate).
+PostgreSQL — база данных.
+```
+### Создаем Dockerfile.frontend(не нужен, так как в докеркомпоуз пулим готовый образ)
+```
+# Используем образ, содержащий Nginx
+FROM nginx:latest
+
+# Копируем конфигурационный файл Nginx внутрь образа
+COPY nginx.conf /etc/nginx/nginx.conf
+
+# Копируем статические файлы внутрь образа
+COPY static/ /usr/share/nginx/html/static/
+
+# Задаем переменную окружения API_URL
+ENV API_URL=http://api:8000
+
+# Открываем порт 80, чтобы Nginx мог слушать запросы
+EXPOSE 80
+
+# Запускаем Nginx
+CMD ["nginx", "-g", "daemon off;"]
+```
+### Создаем Dockerfile.api
+```
+# Используем образ Python 3.10 slim
+FROM python:3.10-slim
+
+# Устанавливаем зависимости
+RUN apt-get update && apt-get install -y netcat
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Копируем код приложения
+COPY . .
+
+# Открываем порт 8000, чтобы API мог слушать запросы
+EXPOSE 8000
+
+# Задаем переменную окружения DATABASE_URL
+ENV DATABASE_URL=postgres://postgres:postgres@postgres:5432/postgres
+
+# Запускаем приложение
+CMD sh -c "python manage.py wait_for_db && python manage.py migrate && python manage.py runserver 0.0.0.0:8000"
+
+```
+### Создаем Dockerfile.migrations
+```
+# Используем образ Python 3.10 slim
+FROM python:3.10-slim
+
+# Устанавливаем зависимости
+RUN apt-get update && apt-get install -y netcat
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Копируем код приложения
+COPY . .
+
+# Задаем переменную окружения DATABASE_URL
+ENV DATABASE_URL=postgres://postgres:postgres@postgres:5432/postgres
+
+# Запускаем миграции
+CMD sh -c "python manage.py wait_for_db && python manage.py migrate"
+
+```
+### Создаем Dockerfile.postgres
+
+```
+# Используем образ PostgreSQL
+FROM postgres:latest
+
+# Задаем переменные окружения для базы данных
+ENV POSTGRES_USER=postgres
+ENV POSTGRES_PASSWORD=postgres
+ENV POSTGRES_DB=postgres
+
+# Копируем файл с инициализационными скриптами
+COPY init.sql /docker-entrypoint-initdb.d/
+
+# Открываем порт 5432, чтобы PostgreSQL мог слушать запросы
+EXPOSE 5432
+```
+
+### Cоздаем файл init.sql со скриптами
+```
+Файл init.sql содержит SQL-скрипты, которые выполняются при инициализации базы данных. 
+В этом файле вы можете создавать таблицы, добавлять данные и выполнять другие операции с базой данных.
+```
+```
+CREATE TABLE users (
+  id SERIAL PRIMARY KEY,
+  name VARCHAR(255),
+  email VARCHAR(255)
+);
+
+INSERT INTO users (name, email) VALUES ('test 1', 'test1@mail.ru');
+INSERT INTO users (name, email) VALUES ('test 2', 'test2@mail.ru');
+
+```
+
+
+### Проверяем корректную работу Dockerfiles
+```
+docker build -t apimyimage:latest -f Dockerfile.api .
+
+docker run --rm -it myimage:latest
+
+Подключаемся к запущенному контейнеру и проверяем наличие установленных в нем пакетов:
+docker exec -it <container-id> bash
+
+Проверка логов
+docker logs <container-id>
+```
+### Создаем файл docker-compose.yml, который объединит все контейнеры в единую сеть
+```
+version: '3.8'
+
+services:
+  frontend:
+    image: sermalenk/skypro-front:lesson-37
+    ports:
+      - "80:80"
+    depends_on:
+      - api
+    restart: unless-stopped
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    ports:
+      - "8000:8000"
+    depends_on:
+      - postgres
+    environment:
+      - DB_USER=myuser
+      - DB_PASSWORD=mypassword
+      - DB_NAME=mydatabase
+      - DB_HOST=postgres
+      - DB_PORT=5432
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+
+  migrations:
+    build:
+      context: .
+      dockerfile: Dockerfile.migrations
+    depends_on:
+      - postgres
+    environment:
+      - DB_USER=myuser
+      - DB_PASSWORD=mypassword
+      - DB_NAME=mydatabase
+      - DB_HOST=postgres
+      - DB_PORT=5432
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+
+  postgres:
+    build:
+      context: .
+      dockerfile: Dockerfile.postgres
+    environment:
+      - POSTGRES_USER=myuser
+      - POSTGRES_PASSWORD=mypassword
+      - POSTGRES_DB=mydatabase
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+
+networks:
+  backend:
+
+volumes:
+  postgres-data:
+```
+### Проверяем docker-compose:
+```
+docker-compose up -d
+Получил ошибку с psycopg - поменял в requirements.txt на psycopg2-binary
+```
+</details>
